@@ -1,0 +1,102 @@
+name: Release (versioned by commit title)
+
+on:
+  push:
+    branches: [main, master, develop]
+
+jobs:
+  extract-version:
+    name: Extract version from commit title
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      should_release: ${{ steps.ver.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Extract version from commit title
+        id: ver
+        shell: bash
+        run: |
+          title="${{ github.event.head_commit.message }}"
+          # Accept formats like:
+          #   v1.2.3
+          #   1.2.3
+          #   Release v1.2.3
+          # Must contain exactly one SemVer in the title.
+          if [[ "$title" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            ver="${BASH_REMATCH[1]}"
+            echo "version=$ver" >> "$GITHUB_OUTPUT"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-publish:
+    name: Build installers & publish release
+    needs: extract-version
+    if: needs.extract-version.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target: nsis
+          - os: macos-latest
+            arch: x64
+            target: dmg
+          - os: ubuntu-latest
+            arch: x64
+            target: AppImage
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Build ${{ matrix.target }}
+        env:
+          # Helps ensure electron-builder doesn't fail due to unresolved native deps.
+          # You can remove once all deps are finalized.
+          ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.extract-version.outputs.version }}"
+          # electron-builder supports passing a version; we use it so assets match the release tag.
+          npx electron-builder \
+            --publish=never \
+            --config.directories.output=release \
+            --config.appId=com.fivesync.app \
+            --config.productName=FiveSync \
+            --config.win.target=nsis \
+            --config.mac.target=dmg \
+            --config.linux.target=${{ matrix.target }} \
+            --targets ${{ matrix.target }} \
+            --version "${VERSION}"
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.extract-version.outputs.version }}
+          name: v${{ needs.extract-version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            release/*.{exe,msi,zip,dmg,AppImage,pkg}
+
