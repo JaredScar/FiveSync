@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
+    "7zip-bin": "^5.2.0",
     "axios": "^1.6.7",
     "electron-updater": "^6.8.3",
     "node-cron": "^3.0.3"
@@ -50,7 +51,11 @@
       "target": "nsis"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "node_modules/7zip-bin/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/7zip-bin/**/*"
     ],
     "publish": {
       "provider": "github",

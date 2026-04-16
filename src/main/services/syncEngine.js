@@ -3,12 +3,18 @@ import { join } from 'path'
 import { createWriteStream, mkdirSync, existsSync, rmSync, cpSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { createRequire } from 'module'
 import axios from 'axios'
-// path7za is the bundled 7-Zip binary included with 7zip-bin
-import { path7za } from '7zip-bin'
 import { getServer, updateServer, addUpdateHistory } from './db'
 import { resolveTargetBuild, parseBuildNumber } from './connector'
 import { writeMarkerBuild } from './serverStatus'
+
+// Load 7zip-bin at runtime via createRequire so that Node resolves the package
+// from node_modules using the package's own __dirname — not the bundle output dir.
+// A static `import { path7za } from '7zip-bin'` causes rollup to inline the module,
+// replacing __dirname with the bundle path and producing a broken binary path.
+const _require = createRequire(import.meta.url)
+const { path7za } = _require('7zip-bin')
 
 const execFileAsync = promisify(execFile)
 const activeJobs = new Map()
