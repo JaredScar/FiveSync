@@ -37,15 +37,19 @@ export default function App() {
         logs: [...(prev?.logs || []), line]
       }))
     })
-    const unsub3 = window.api.on('sync-complete', ({ serverId, result }) => {
+    const unsub3 = window.api.on('sync-complete', async ({ serverId, result }) => {
       setSyncState(serverId, { running: false, progress: 100 })
-      loadServers()
+      // Wait for the server list to reload (so current_build is updated in store)
+      // before refreshing artifact info, otherwise the stat card may briefly flash
+      // the old build number.
+      await loadServers()
       if (result?.status === 'success') {
-        addToast({ type: 'success', message: `Server updated to build ${result.build}` })
-        refreshArtifact(serverId)
+        addToast({ type: 'success', message: `Updated to build ${result.build?.split('-')[0]}` })
+        await refreshArtifact(serverId)
         refreshHistory(serverId)
       } else if (result?.status === 'up_to_date') {
         addToast({ type: 'info', message: 'Server is already up to date' })
+        refreshArtifact(serverId)
       }
     })
     const unsub4 = window.api.on('sync-error', ({ serverId, error }) => {

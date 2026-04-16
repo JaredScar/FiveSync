@@ -15,8 +15,12 @@ export const useStore = create((set, get) => ({
   setActiveServerId: (id) => set({ activeServerId: id }),
   setArtifactInfo: (serverId, info) =>
     set((s) => ({ artifactInfo: { ...s.artifactInfo, [serverId]: info } })),
-  setSyncState: (serverId, state) =>
-    set((s) => ({ syncState: { ...s.syncState, [serverId]: state } })),
+  setSyncState: (serverId, stateOrUpdater) =>
+    set((s) => {
+      const prev = s.syncState[serverId] || {}
+      const next = typeof stateOrUpdater === 'function' ? stateOrUpdater(prev) : stateOrUpdater
+      return { syncState: { ...s.syncState, [serverId]: next } }
+    }),
   setSchedule: (serverId, schedule) =>
     set((s) => ({ schedules: { ...s.schedules, [serverId]: schedule } })),
   setHistory: (serverId, history) =>

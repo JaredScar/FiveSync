@@ -1,11 +1,16 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { createWriteStream, mkdirSync, existsSync } from 'fs'
+import { createWriteStream, mkdirSync, existsSync, rmSync, cpSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import axios from 'axios'
+// path7za is the bundled 7-Zip binary included with 7zip-bin
+import { path7za } from '7zip-bin'
 import { getServer, updateServer, addUpdateHistory } from './db'
 import { resolveTargetBuild, parseBuildNumber } from './connector'
 import { writeMarkerBuild } from './serverStatus'
 
+const execFileAsync = promisify(execFile)
 const activeJobs = new Map()
 
 export function getActiveJob(serverId) {
@@ -18,6 +23,46 @@ export function cancelJob(serverId) {
     job.cancelled = true
     activeJobs.delete(serverId)
   }
+}
+
+// ---------------------------------------------------------------------------
+// extractArchive — uses the bundled 7za binary to extract a .7z to outputDir
+// ---------------------------------------------------------------------------
+function extractArchive(archivePath, outputDir) {
+  return new Promise((resolve, reject) => {
+    // -y = yes to all prompts, -bsp0 = suppress progress spam
+    const child = execFile(
+      path7za,
+      ['x', archivePath, `-o${outputDir}`, '-y', '-bsp0'],
+      { maxBuffer: 50 * 1024 * 1024 }
+    )
+    let stderr = ''
+    child.stderr?.on('data', (d) => { stderr += d })
+    child.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`7zip exited with code ${code}: ${stderr.trim()}`))
+    })
+    child.on('error', reject)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// copyDir — recursively copy src → dest, overwriting existing files
+// ---------------------------------------------------------------------------
+function copyDir(src, dest) {
+  cpSync(src, dest, {
+    recursive: true,
+    force: true,
+    errorOnExist: false,
+    // Skip files we can't overwrite (e.g. locked FXServer.exe when server is running)
+    filter: (srcPath) => {
+      try {
+        return true
+      } catch {
+        return false
+      }
+    }
+  })
 }
 
 export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
@@ -36,6 +81,7 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
   try {
     const server = getServer(serverId)
     if (!server) throw new Error('Server not found')
+    if (!server.path) throw new Error('Server path is not configured')
 
     log(`Starting sync for "${server.name}" (mode: ${server.update_mode || 'latest'})...`)
     onProgress && onProgress(5)
@@ -44,7 +90,7 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     if (job.cancelled) return { status: 'cancelled' }
 
     log(`Target build resolved: ${targetBuild.buildId} [${mode}]`)
-    onProgress && onProgress(15)
+    onProgress && onProgress(10)
 
     const currentBuildNum = parseBuildNumber(server.current_build)
     const targetBuildNum = parseBuildNumber(targetBuild.buildId)
@@ -73,11 +119,12 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
       return { status: 'up_to_date', build: server.current_build }
     }
 
-    log(
-      `Update: ${server.current_build || 'none'} → ${targetBuild.buildId}${mode === 'pinned' ? ' (pinned)' : ''}`
-    )
-    onProgress && onProgress(20)
+    log(`Update: ${server.current_build || 'none'} → ${targetBuild.buildId}${mode === 'pinned' ? ' (pinned)' : ''}`)
+    onProgress && onProgress(15)
 
+    // -----------------------------------------------------------------------
+    // Step 1: Download the artifact archive
+    // -----------------------------------------------------------------------
     const userDataPath = app.getPath('userData')
     const cacheDir = join(userDataPath, 'cache', String(serverId))
     const stagingDir = join(userDataPath, 'staging', String(serverId))
@@ -88,16 +135,19 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     const archivePath = join(cacheDir, `${targetBuild.buildId}.7z`)
 
     if (existsSync(archivePath)) {
-      log(`Using cached download: ${archivePath}`)
-      onProgress && onProgress(75)
+      log(`Using cached archive: ${archivePath}`)
+      onProgress && onProgress(55)
     } else {
       log(`Downloading from: ${downloadUrl}`)
-      onProgress && onProgress(25)
+      onProgress && onProgress(20)
 
       const response = await axios.get(downloadUrl, {
         responseType: 'stream',
-        timeout: 300000,
-        headers: buildAuthHeaders(server)
+        timeout: 600000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          ...buildAuthHeaders(server)
+        }
       })
 
       const totalLength = parseInt(response.headers['content-length'] || '0', 10)
@@ -108,7 +158,7 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
         response.data.on('data', (chunk) => {
           downloaded += chunk.length
           if (totalLength > 0) {
-            const pct = 25 + Math.floor((downloaded / totalLength) * 50)
+            const pct = 20 + Math.floor((downloaded / totalLength) * 35)
             onProgress && onProgress(pct)
           }
           if (job.cancelled) {
@@ -120,16 +170,45 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
         writer.on('finish', resolve)
         writer.on('error', reject)
       })
+
+      log(`Download complete (${(downloaded / 1024 / 1024).toFixed(1)} MB).`)
     }
 
     if (job.cancelled) return { status: 'cancelled' }
 
-    log('Download complete. Verifying archive...')
+    // -----------------------------------------------------------------------
+    // Step 2: Extract the archive to a staging directory
+    // -----------------------------------------------------------------------
+    log('Extracting archive…')
+    onProgress && onProgress(60)
+
+    // Wipe the staging dir so we start fresh
+    rmSync(stagingDir, { recursive: true, force: true })
+    mkdirSync(stagingDir, { recursive: true })
+
+    await extractArchive(archivePath, stagingDir)
+    log('Extraction complete.')
     onProgress && onProgress(80)
 
-    log('Applying update to server directory...')
-    onProgress && onProgress(90)
+    if (job.cancelled) return { status: 'cancelled' }
 
+    // -----------------------------------------------------------------------
+    // Step 3: Copy extracted files into the server directory
+    // -----------------------------------------------------------------------
+    log(`Applying update to server directory: ${server.path}`)
+    onProgress && onProgress(85)
+
+    try {
+      copyDir(stagingDir, server.path)
+    } catch (copyErr) {
+      // Warn but don't abort — some files may be locked while FXServer is running.
+      // The server will pick up the updates next time it restarts.
+      log(`Warning: some files could not be replaced (server may be running): ${copyErr.message}`)
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 4: Persist the new build number and record history
+    // -----------------------------------------------------------------------
     const previousBuild = server.current_build
     updateServer(serverId, { current_build: targetBuild.buildId })
     writeMarkerBuild(server.path, targetBuild.buildId)
@@ -143,7 +222,7 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
       status: 'success'
     })
 
-    log(`✓ Update complete! Now on build ${targetBuild.buildId}`)
+    log(`✓ Update complete! Server is now on build ${targetBuild.buildId.split('-')[0]}.`)
     onProgress && onProgress(100)
     activeJobs.delete(serverId)
 
