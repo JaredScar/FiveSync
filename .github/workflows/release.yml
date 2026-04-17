@@ -81,7 +81,11 @@ jobs:
           VERSION="${{ needs.extract-version.outputs.version }}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      - name: Build ${{ matrix.target }}
+      - name: Compile app (electron-vite)
+        shell: bash
+        run: npm run build
+
+      - name: Package ${{ matrix.target }} installer
         shell: bash
         env:
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
@@ -89,9 +93,6 @@ jobs:
         run: |
           npx electron-builder \
             --publish=never \
-            --config.directories.output=release \
-            --config.appId=com.fivesync.app \
-            --config.productName=FiveSync \
             ${{ matrix.platform_flag }} ${{ matrix.target }}
 
       - name: Create/Update GitHub Release
