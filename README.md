@@ -12,6 +12,9 @@ FiveSync is a desktop Electron app that keeps your FiveM server artifacts up to 
 
 Add multiple servers, detect newer builds from `runtime.fivem.net`, and apply updates on demand or on a schedule, with progress, history, and rollback. ✅
 
+## Current Version ℹ️
+- v1.0.1
+
 ## Features 🚀
 
 - Multi-server management (add/edit/delete) 🧰
