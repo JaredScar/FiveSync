@@ -39,7 +39,7 @@ export default [
       }
     },
     settings: {
-      react: { version: 'detect' }
+      react: { version: '18' }
     },
     rules: {
       ...reactPlugin.configs.recommended.rules,
