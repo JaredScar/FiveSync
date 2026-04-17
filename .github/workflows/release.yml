@@ -39,6 +39,8 @@ jobs:
     name: Build installers & publish release
     needs: extract-version
     if: needs.extract-version.outputs.should_release == 'true'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -70,15 +72,18 @@ jobs:
       - name: Install deps
         run: npm ci --legacy-peer-deps
 
+      - name: Bump version in package.json
+        shell: bash
+        run: |
+          VERSION="${{ needs.extract-version.outputs.version }}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
       - name: Build ${{ matrix.target }}
+        shell: bash
         env:
-          # Helps ensure electron-builder doesn't fail due to unresolved native deps.
-          # You can remove once all deps are finalized.
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ needs.extract-version.outputs.version }}"
-          # electron-builder supports passing a version; we use it so assets match the release tag.
           npx electron-builder \
             --publish=never \
             --config.directories.output=release \
@@ -87,8 +92,7 @@ jobs:
             --config.win.target=nsis \
             --config.mac.target=dmg \
             --config.linux.target=${{ matrix.target }} \
-            --targets ${{ matrix.target }} \
-            --version "${VERSION}"
+            --${{ matrix.target }}
 
       - name: Create/Update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -98,5 +102,10 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release/*.{exe,msi,zip,dmg,AppImage,pkg}
+            release/*.exe
+            release/*.msi
+            release/*.zip
+            release/*.dmg
+            release/*.AppImage
+            release/*.pkg
 
