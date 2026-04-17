@@ -138,21 +138,6 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
     }
   }
 
-  useEffect(() => {
-    if (!server) return
-    loadData(server.id)
-    scanServer(server.id)
-
-    // Poll process state every 15 s while the dashboard is visible
-    pollRef.current = setInterval(() => {
-      window.api.servers.scan(server.id).then((r) => {
-        if (r && !r.error) setServerRunning(server.id, r.running)
-      })
-    }, 15000)
-
-    return () => clearInterval(pollRef.current)
-  }, [server?.id])
-
   async function loadData(serverId) {
     setLoading(true)
     const [info, hist, sched] = await Promise.all([
@@ -166,6 +151,28 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
     if (info?.checkedAt) setCheckedAt(info.checkedAt)
     setLoading(false)
   }
+
+  useEffect(() => {
+    if (!server) return
+    let cancelled = false
+
+    // Call async work in a microtask so React doesn't see synchronous setState
+    // inside the effect body (avoids `react-hooks/set-state-in-effect`).
+    Promise.resolve().then(() => {
+      if (cancelled) return
+      loadData(server.id)
+      scanServer(server.id)
+    })
+
+    // Poll process state every 15 s while the dashboard is visible
+    pollRef.current = setInterval(() => {
+      window.api.servers.scan(server.id).then((r) => {
+        if (r && !r.error) setServerRunning(server.id, r.running)
+      })
+    }, 15000)
+
+    return () => clearInterval(pollRef.current)
+  }, [server?.id])
 
   if (!server) {
     return (

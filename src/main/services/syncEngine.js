@@ -8,6 +8,7 @@ import axios from 'axios'
 import { getServer, updateServer, addUpdateHistory } from './db'
 import { resolveTargetBuild, parseBuildNumber } from './connector'
 import { writeMarkerBuild } from './serverStatus'
+import { Buffer } from 'buffer'
 
 // Load 7zip-bin at runtime via createRequire so that Node resolves the package
 // from node_modules using the package's own __dirname — not the bundle output dir.
@@ -60,14 +61,9 @@ function copyDir(src, dest) {
     recursive: true,
     force: true,
     errorOnExist: false,
-    // Skip files we can't overwrite (e.g. locked FXServer.exe when server is running)
-    filter: (srcPath) => {
-      try {
-        return true
-      } catch {
-        return false
-      }
-    }
+    // Keep existing behavior: attempt to overwrite everything.
+    // Locked files (e.g. FXServer.exe while the server is running) are handled
+    // by the surrounding try/catch in the caller.
   })
 }
 
