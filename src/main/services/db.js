@@ -69,7 +69,7 @@ export function createServer(data) {
     auth_header_name: data.auth_header_name || null,
     auth_header_value: data.auth_header_value || null,
     // Server process: match running process to stop before updates; start command after install
-    process_match_type: data.process_match_type || null, // 'pid' | 'path' | 'name' | null (legacy: FXServer)
+    process_match_type: data.process_match_type || null, // 'path' | 'name' | null (legacy: FXServer)
     process_match_value: data.process_match_value || null,
     start_command_path: data.start_command_path || null,
     start_working_dir: data.start_working_dir || null,

@@ -138,7 +138,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
     .map((p, idx) => ({ ...p, idx }))
     .filter((p) => {
       if (!processQuery) return true
-      return [p.pid, p.name, p.path, p.commandLine]
+      return [p.name, p.path, p.commandLine]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(processQuery))
     })
@@ -256,7 +256,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
                 <option value="name">Process name</option>
               </select>
               <span className="field-hint">
-                Use executable path when possible. PIDs change after every restart, so FiveSync does not save them as the long-term match.
+                Use executable path when possible; fall back to process name when a path is not available.
               </span>
             </div>
             {form.process_match_type && (
@@ -285,7 +285,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
                       className="input"
                       value={processSearch}
                       onChange={(e) => setProcessSearch(e.target.value)}
-                      placeholder="Search by PID, name, path, or command line"
+                      placeholder="Search by name, path, or command line"
                       style={{ marginBottom: 8 }}
                     />
                     <div
@@ -320,7 +320,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
                             }}
                           >
                             <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
-                              {p.pid} - {p.name || 'Unknown process'}
+                              {p.name || 'Unknown process'}
                             </div>
                             <div style={{ marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {p.path || p.commandLine || 'No path available'}

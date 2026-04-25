@@ -119,12 +119,6 @@ function matchConfiguredProcess(server) {
   if (!type || !value) return null
 
   const procs = listRunningProcesses()
-  if (type === 'pid') {
-    const n = parseInt(value, 10)
-    if (!Number.isFinite(n)) return null
-    const p = procs.find((x) => x.pid === n)
-    return p || null
-  }
   if (type === 'path') {
     const v = normPath(value)
     for (const p of procs) {
