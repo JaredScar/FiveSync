@@ -322,7 +322,7 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
             boxShadow: isRunning ? '0 0 6px var(--green)' : 'none'
           }} />
           <span style={{ color: 'var(--text-secondary)' }}>
-            FXServer process: <strong style={{ color: isRunning ? 'var(--green)' : 'var(--text-primary)' }}>
+            Server process: <strong style={{ color: isRunning ? 'var(--green)' : 'var(--text-primary)' }}>
               {isRunning ? 'Running' : 'Not running'}
             </strong>
           </span>

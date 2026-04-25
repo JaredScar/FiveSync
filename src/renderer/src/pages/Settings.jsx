@@ -18,7 +18,11 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
     auth_user: '',
     auth_pass: '',
     auth_header_name: '',
-    auth_header_value: ''
+    auth_header_value: '',
+    process_match_type: '',
+    process_match_value: '',
+    start_command_path: '',
+    start_working_dir: ''
   })
   const [showAuth, setShowAuth] = useState(false)
   const [availableBuilds, setAvailableBuilds] = useState([])
@@ -26,6 +30,8 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [checkingArtifact, setCheckingArtifact] = useState(false)
+  const [processList, setProcessList] = useState([])
+  const [loadingProcesses, setLoadingProcesses] = useState(false)
 
   useEffect(() => {
     if (!server) return
@@ -42,7 +48,11 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
       auth_user: server.auth_user || '',
       auth_pass: server.auth_pass || '',
       auth_header_name: server.auth_header_name || '',
-      auth_header_value: server.auth_header_value || ''
+      auth_header_value: server.auth_header_value || '',
+      process_match_type: server.process_match_type || '',
+      process_match_value: server.process_match_value || '',
+      start_command_path: server.start_command_path || '',
+      start_working_dir: server.start_working_dir || ''
     })
     loadArtifactInfo(server.id)
     setConfirmDelete(false)
@@ -62,11 +72,27 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
     setLoadingBuilds(false)
   }
 
+  async function loadRunningProcesses() {
+    setLoadingProcesses(true)
+    const { processes, error } = await window.api.processes.list()
+    if (error) {
+      addToast({ type: 'error', message: error })
+      setProcessList([])
+    } else {
+      setProcessList(processes || [])
+    }
+    setLoadingProcesses(false)
+  }
+
   async function handleSave(e) {
     e.preventDefault()
     if (!server) return
     if (!form.name.trim()) { addToast({ type: 'error', message: 'Server name cannot be empty' }); return }
     if (!form.path.trim()) { addToast({ type: 'error', message: 'Server path cannot be empty' }); return }
+    if (form.process_match_type && !String(form.process_match_value || '').trim()) {
+      addToast({ type: 'error', message: 'Process match is enabled — enter a match value, pick a process, or clear Process match' })
+      return
+    }
     // We need a current build number to compare "up-to-date" and to display a meaningful
     // artifact status before the first managed update runs.
     if (!form.current_build.trim()) { addToast({ type: 'error', message: 'Current artifact/build is required' }); return }
@@ -75,6 +101,11 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
       // Persist current_build as the raw number string (no hash suffix needed for manual entry)
       const saveData = { ...form }
       if (saveData.current_build) saveData.current_build = saveData.current_build.trim()
+      // Empty strings clear process fields in DB; omit nulls so merge keeps behavior
+      if (!saveData.process_match_type) saveData.process_match_type = ''
+      if (!saveData.process_match_value) saveData.process_match_value = ''
+      if (!saveData.start_command_path) saveData.start_command_path = ''
+      if (!saveData.start_working_dir) saveData.start_working_dir = ''
       await window.api.servers.update(server.id, saveData)
       await onSaveSettings()
       addToast({ type: 'success', message: 'Settings saved' })
@@ -172,6 +203,138 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
               <option value="windows">Windows</option>
               <option value="linux">Linux</option>
             </select>
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Server process (updates)</div>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              Stop a chosen process before installing artifacts, then start a launcher (e.g. a <code style={{ fontSize: 10 }}>.bat</code> or <code style={{ fontSize: 10 }}>FXServer.exe</code>).
+              Leave match on default to auto-detect <strong>FXServer</strong> under your server path.
+            </p>
+            <div className="field">
+              <label>Process to match (stop before update)</label>
+              <select
+                className="input"
+                value={form.process_match_type}
+                onChange={(e) => setForm((f) => ({ ...f, process_match_type: e.target.value }))}
+              >
+                <option value="">Default (FXServer under server path)</option>
+                <option value="pid">Process ID (PID)</option>
+                <option value="path">Executable path</option>
+                <option value="name">Process name</option>
+              </select>
+            </div>
+            {form.process_match_type && (
+              <>
+                <div style={{ marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    onClick={loadRunningProcesses}
+                    disabled={loadingProcesses}
+                    style={{
+                      fontSize: 12,
+                      padding: '5px 12px',
+                      background: 'var(--bg-input)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-secondary)'
+                    }}
+                  >
+                    {loadingProcesses ? 'Loading processes…' : 'Refresh running processes'}
+                  </button>
+                </div>
+                {processList.length > 0 && (
+                  <div className="field">
+                    <label>Pick a running process</label>
+                    <select
+                      className="input"
+                      defaultValue=""
+                      onChange={(e) => {
+                        const i = e.target.value
+                        if (i === '') return
+                        const p = processList[Number(i)]
+                        if (!p) return
+                        const t = form.process_match_type
+                        if (t === 'pid') setForm((f) => ({ ...f, process_match_value: String(p.pid) }))
+                        else if (t === 'path') {
+                          const v = p.path || (p.commandLine && p.commandLine.trim().split(/\s+/)[0]) || ''
+                          setForm((f) => ({ ...f, process_match_value: v }))
+                        } else if (t === 'name') setForm((f) => ({ ...f, process_match_value: p.name || '' }))
+                        e.target.value = ''
+                      }}
+                    >
+                      <option value="">— apply selection —</option>
+                      {processList.map((p, idx) => (
+                        <option key={`${p.pid}-${idx}`} value={String(idx)}>
+                          {p.pid} — {p.name || '—'} {p.path ? `— ${p.path}` : p.commandLine ? `— ${p.commandLine.slice(0, 80)}…` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="field">
+                  <label>Match value (required)</label>
+                  <input
+                    className="input"
+                    value={form.process_match_value}
+                    onChange={(e) => setForm((f) => ({ ...f, process_match_value: e.target.value }))}
+                    placeholder={
+                      form.process_match_type === 'pid' ? 'e.g. 12345'
+                        : form.process_match_type === 'path' ? 'C:\\...\\server.exe or full path'
+                        : 'e.g. FXServer'
+                    }
+                  />
+                </div>
+              </>
+            )}
+            <div className="field">
+              <label>Start after update</label>
+              <div className="input-with-icon">
+                <input
+                  className="input"
+                  value={form.start_command_path}
+                  onChange={(e) => setForm((f) => ({ ...f, start_command_path: e.target.value }))}
+                  placeholder="Path to .bat, .cmd, .ps1, .sh, or .exe"
+                />
+                <span
+                  className="input-icon"
+                  title="Browse file"
+                  onClick={async () => {
+                    const file = await window.api.dialog.openFile()
+                    if (file) setForm((f) => ({ ...f, start_command_path: file }))
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><path d="M10 9H8.5a2.5 2.5 0 0 0 0 5H10"/>
+                  </svg>
+                </span>
+              </div>
+              <span className="field-hint">If empty, FiveSync will not start the server after an update (you can start it yourself).</span>
+            </div>
+            <div className="field">
+              <label>Start working directory (optional)</label>
+              <div className="input-with-icon">
+                <input
+                  className="input"
+                  value={form.start_working_dir}
+                  onChange={(e) => setForm((f) => ({ ...f, start_working_dir: e.target.value }))}
+                  placeholder="Defaults to the launcher’s folder or server path"
+                />
+                <span
+                  className="input-icon"
+                  title="Browse folder"
+                  onClick={async () => {
+                    const folder = await window.api.dialog.openFolder()
+                    if (folder) setForm((f) => ({ ...f, start_working_dir: folder }))
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </span>
+              </div>
+            </div>
           </div>
 
           <div className="field">

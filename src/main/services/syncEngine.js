@@ -2,12 +2,12 @@ import { app } from 'electron'
 import { join } from 'path'
 import { createWriteStream, mkdirSync, existsSync, rmSync, cpSync } from 'fs'
 import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { createRequire } from 'module'
 import axios from 'axios'
 import { getServer, updateServer, addUpdateHistory } from './db'
 import { resolveTargetBuild, parseBuildNumber } from './connector'
 import { writeMarkerBuild } from './serverStatus'
+import { stopServerProcessForUpdate, startServerCommand } from './processControl'
 import { Buffer } from 'buffer'
 
 // Load 7zip-bin at runtime via createRequire so that Node resolves the package
@@ -17,7 +17,6 @@ import { Buffer } from 'buffer'
 const _require = createRequire(import.meta.url)
 const { path7za } = _require('7zip-bin')
 
-const execFileAsync = promisify(execFile)
 const activeJobs = new Map()
 
 export function getActiveJob(serverId) {
@@ -195,17 +194,19 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     if (job.cancelled) return { status: 'cancelled' }
 
     // -----------------------------------------------------------------------
-    // Step 3: Copy extracted files into the server directory
+    // Step 3: Stop configured server process, then copy extracted files
     // -----------------------------------------------------------------------
+    await stopServerProcessForUpdate(server, log)
+    onProgress && onProgress(82)
+
     log(`Applying update to server directory: ${server.path}`)
     onProgress && onProgress(85)
 
     try {
       copyDir(stagingDir, server.path)
     } catch (copyErr) {
-      // Warn but don't abort — some files may be locked while FXServer is running.
-      // The server will pick up the updates next time it restarts.
-      log(`Warning: some files could not be replaced (server may be running): ${copyErr.message}`)
+      log(`Error: could not replace some files: ${copyErr.message}`)
+      throw copyErr
     }
 
     // -----------------------------------------------------------------------
@@ -225,10 +226,25 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     })
 
     log(`✓ Update complete! Server is now on build ${targetBuild.buildId.split('-')[0]}.`)
+
+    const restart = startServerCommand(getServer(serverId) || server)
+    if (restart.started) {
+      log(`Started server launcher (PID ${restart.pid ?? '—'}).`)
+    } else if (restart.error) {
+      log(`Warning: could not start configured launcher: ${restart.error}`)
+    } else if (restart.message) {
+      log(restart.message)
+    }
+
     onProgress && onProgress(100)
     activeJobs.delete(serverId)
 
-    return { status: 'success', build: targetBuild.buildId, previousBuild }
+    return {
+      status: 'success',
+      build: targetBuild.buildId,
+      previousBuild,
+      restart
+    }
   } catch (err) {
     const server = getServer(serverId)
     const durationMs = Date.now() - (job.startedAt || Date.now())

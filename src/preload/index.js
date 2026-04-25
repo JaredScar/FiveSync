@@ -30,7 +30,11 @@ const api = {
     open: (url) => ipcRenderer.invoke('shell:open', url)
   },
   dialog: {
-    openFolder: () => ipcRenderer.invoke('dialog:openFolder')
+    openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
+    openFile: (options) => ipcRenderer.invoke('dialog:openFile', options)
+  },
+  processes: {
+    list: () => ipcRenderer.invoke('processes:list')
   },
   appUpdate: {
     check: () => ipcRenderer.invoke('app-update:check'),

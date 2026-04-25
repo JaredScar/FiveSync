@@ -13,6 +13,7 @@ import { getLatestBuild, fetchRemoteBuildList, compareBuildNumbers } from './con
 import { runSyncJob, getActiveJob, cancelJob } from './syncEngine'
 import { refreshServerSchedule } from './scheduler'
 import { detectInstalledBuild, isServerProcessRunning } from './serverStatus'
+import { listRunningProcesses } from './processControl'
 
 export function registerIpcHandlers() {
   ipcMain.handle('servers:list', async () => {
@@ -81,7 +82,7 @@ export function registerIpcHandlers() {
       if (!server) return { error: 'Server not found' }
 
       const detectedBuild = detectInstalledBuild(server.path)
-      const running = isServerProcessRunning(server.path)
+      const running = isServerProcessRunning(server)
 
       // Persist detected build back to DB if it differs
       if (detectedBuild && detectedBuild !== server.current_build) {
@@ -179,5 +180,27 @@ export function registerIpcHandlers() {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  ipcMain.handle('dialog:openFile', async (event, options = {}) => {
+    const win = require('electron').BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      title: options.title || 'Select script or executable',
+      filters: options.filters || [
+        { name: 'Server launcher', extensions: ['bat', 'cmd', 'exe', 'ps1', 'sh'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('processes:list', async () => {
+    try {
+      return { processes: listRunningProcesses() }
+    } catch (err) {
+      return { processes: [], error: err.message }
+    }
   })
 }
