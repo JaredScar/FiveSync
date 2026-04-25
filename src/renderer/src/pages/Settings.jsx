@@ -32,6 +32,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
   const [checkingArtifact, setCheckingArtifact] = useState(false)
   const [processList, setProcessList] = useState([])
   const [loadingProcesses, setLoadingProcesses] = useState(false)
+  const [processSearch, setProcessSearch] = useState('')
 
   useEffect(() => {
     if (!server) return
@@ -132,6 +133,38 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
   }
 
   const info = artifactInfo[server.id] || {}
+  const processQuery = processSearch.trim().toLowerCase()
+  const filteredProcesses = processList
+    .map((p, idx) => ({ ...p, idx }))
+    .filter((p) => {
+      if (!processQuery) return true
+      return [p.pid, p.name, p.path, p.commandLine]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(processQuery))
+    })
+    .slice(0, 50)
+
+  function applyProcessSelection(processInfo) {
+    const pathValue =
+      processInfo.path ||
+      (processInfo.commandLine && processInfo.commandLine.trim().split(/\s+/)[0]) ||
+      ''
+
+    if (pathValue) {
+      setForm((f) => ({
+        ...f,
+        process_match_type: 'path',
+        process_match_value: pathValue
+      }))
+      return
+    }
+
+    setForm((f) => ({
+      ...f,
+      process_match_type: 'name',
+      process_match_value: processInfo.name || ''
+    }))
+  }
 
   return (
     <div className="fade-in" style={{ padding: '24px 28px' }}>
@@ -212,17 +245,19 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
               Leave match on default to auto-detect <strong>FXServer</strong> under your server path.
             </p>
             <div className="field">
-              <label>Process to match (stop before update)</label>
+              <label>Process match strategy</label>
               <select
                 className="input"
                 value={form.process_match_type}
                 onChange={(e) => setForm((f) => ({ ...f, process_match_type: e.target.value }))}
               >
                 <option value="">Default (FXServer under server path)</option>
-                <option value="pid">Process ID (PID)</option>
                 <option value="path">Executable path</option>
                 <option value="name">Process name</option>
               </select>
+              <span className="field-hint">
+                Use executable path when possible. PIDs change after every restart, so FiveSync does not save them as the long-term match.
+              </span>
             </div>
             {form.process_match_type && (
               <>
@@ -246,41 +281,72 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
                 {processList.length > 0 && (
                   <div className="field">
                     <label>Pick a running process</label>
-                    <select
+                    <input
                       className="input"
-                      defaultValue=""
-                      onChange={(e) => {
-                        const i = e.target.value
-                        if (i === '') return
-                        const p = processList[Number(i)]
-                        if (!p) return
-                        const t = form.process_match_type
-                        if (t === 'pid') setForm((f) => ({ ...f, process_match_value: String(p.pid) }))
-                        else if (t === 'path') {
-                          const v = p.path || (p.commandLine && p.commandLine.trim().split(/\s+/)[0]) || ''
-                          setForm((f) => ({ ...f, process_match_value: v }))
-                        } else if (t === 'name') setForm((f) => ({ ...f, process_match_value: p.name || '' }))
-                        e.target.value = ''
+                      value={processSearch}
+                      onChange={(e) => setProcessSearch(e.target.value)}
+                      placeholder="Search by PID, name, path, or command line"
+                      style={{ marginBottom: 8 }}
+                    />
+                    <div
+                      style={{
+                        maxHeight: 180,
+                        overflowY: 'auto',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--bg-input)'
                       }}
                     >
-                      <option value="">— apply selection —</option>
-                      {processList.map((p, idx) => (
-                        <option key={`${p.pid}-${idx}`} value={String(idx)}>
-                          {p.pid} — {p.name || '—'} {p.path ? `— ${p.path}` : p.commandLine ? `— ${p.commandLine.slice(0, 80)}…` : ''}
-                        </option>
-                      ))}
-                    </select>
+                      {filteredProcesses.length === 0 ? (
+                        <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+                          No matching processes
+                        </div>
+                      ) : (
+                        filteredProcesses.map((p) => (
+                          <button
+                            key={`${p.pid}-${p.idx}`}
+                            type="button"
+                            onClick={() => applyProcessSelection(p)}
+                            title="Use this process as a stable path/name match"
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              textAlign: 'left',
+                              padding: '8px 10px',
+                              background: 'transparent',
+                              borderBottom: '1px solid var(--border)',
+                              color: 'var(--text-secondary)',
+                              fontSize: 11
+                            }}
+                          >
+                            <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                              {p.pid} - {p.name || 'Unknown process'}
+                            </div>
+                            <div style={{ marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {p.path || p.commandLine || 'No path available'}
+                            </div>
+                            <div style={{ marginTop: 2, color: 'var(--text-muted)' }}>
+                              Click to save as {p.path || p.commandLine ? 'executable path' : 'process name'}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    {processList.length > 50 && (
+                      <span className="field-hint">
+                        Showing up to 50 matches. Use search to narrow the process list.
+                      </span>
+                    )}
                   </div>
                 )}
                 <div className="field">
-                  <label>Match value (required)</label>
+                  <label>{form.process_match_type === 'path' ? 'Executable path match' : 'Process name match'} (required)</label>
                   <input
                     className="input"
                     value={form.process_match_value}
                     onChange={(e) => setForm((f) => ({ ...f, process_match_value: e.target.value }))}
                     placeholder={
-                      form.process_match_type === 'pid' ? 'e.g. 12345'
-                        : form.process_match_type === 'path' ? 'C:\\...\\server.exe or full path'
+                      form.process_match_type === 'path' ? 'C:\\...\\server.exe or full path'
                         : 'e.g. FXServer'
                     }
                   />
