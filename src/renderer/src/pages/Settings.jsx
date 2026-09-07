@@ -94,14 +94,15 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
       addToast({ type: 'error', message: 'Process match is enabled — enter a match value, pick a process, or clear Process match' })
       return
     }
-    // We need a current build number to compare "up-to-date" and to display a meaningful
-    // artifact status before the first managed update runs.
-    if (!form.current_build.trim()) { addToast({ type: 'error', message: 'Current artifact/build is required' }); return }
+    // current_build is optional: leaving it blank tells FiveSync to treat the server
+    // as "never synced" and always download + apply the artifact on the next sync.
     setSaving(true)
     try {
-      // Persist current_build as the raw number string (no hash suffix needed for manual entry)
+      // Persist current_build as the raw number string (no hash suffix needed for manual entry).
+      // An empty value is stored as '' so parseBuildNumber treats it as null and the next
+      // sync always proceeds — useful to force a fresh install.
       const saveData = { ...form }
-      if (saveData.current_build) saveData.current_build = saveData.current_build.trim()
+      saveData.current_build = (saveData.current_build || '').trim()  // '' clears it
       // Empty strings clear process fields in DB; omit nulls so merge keeps behavior
       if (!saveData.process_match_type) saveData.process_match_type = ''
       if (!saveData.process_match_value) saveData.process_match_value = ''
@@ -226,7 +227,7 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
               onChange={(e) => setForm((f) => ({ ...f, current_build: e.target.value.replace(/\D/g, '') }))}
             />
             <span className="field-hint">
-              FiveM does not store the build number on disk. Enter yours manually, or FiveSync will track it automatically after the first update.
+              FiveM does not store the build number on disk. Enter yours if known, or leave blank to force a full download on the next sync — FiveSync will track it automatically after each managed update.
             </span>
           </div>
 

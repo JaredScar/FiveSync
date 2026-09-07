@@ -5,7 +5,7 @@ import { execFile } from 'child_process'
 import { createRequire } from 'module'
 import axios from 'axios'
 import { getServer, updateServer, addUpdateHistory } from './db'
-import { resolveTargetBuild, parseBuildNumber } from './connector'
+import { resolveTargetBuild, parseBuildNumber, getBuildById } from './connector'
 import { writeMarkerBuild } from './serverStatus'
 import { stopServerProcessForUpdate, startServerCommand } from './processControl'
 import { Buffer } from 'buffer'
@@ -87,7 +87,23 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     log(`Starting sync for "${server.name}" (mode: ${server.update_mode || 'latest'})...`)
     onProgress && onProgress(5)
 
-    const { build: targetBuild, mode } = await resolveTargetBuild(server)
+    // When a specific targetBuild is supplied (rollback), look it up directly instead
+    // of calling resolveTargetBuild which would just return the latest/pinned build.
+    let targetBuild, mode
+    if (options.targetBuild) {
+      const found = await getBuildById(options.targetBuild)
+      if (!found)
+        throw new Error(
+          `Rollback target "${options.targetBuild}" was not found on the remote feed. ` +
+          `It may have been purged. Try selecting a more recent build.`
+        )
+      targetBuild = found
+      mode = 'rollback'
+    } else {
+      const resolved = await resolveTargetBuild(server)
+      targetBuild = resolved.build
+      mode = resolved.mode
+    }
     if (job.cancelled) return { status: 'cancelled' }
 
     log(`Target build resolved: ${targetBuild.buildId} [${mode}]`)

@@ -118,7 +118,14 @@ function matchConfiguredProcess(server) {
   const value = (server.process_match_value || '').trim()
   if (!type || !value) return null
 
-  const procs = listRunningProcesses()
+  let procs
+  try {
+    procs = listRunningProcesses()
+  } catch {
+    // If listing processes fails (e.g. PowerShell timeout/permission), treat as
+    // "no match found" so the sync can still proceed without stopping anything.
+    return null
+  }
   if (type === 'path') {
     const v = normPath(value)
     for (const p of procs) {

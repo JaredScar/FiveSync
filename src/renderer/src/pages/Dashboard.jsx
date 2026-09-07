@@ -105,6 +105,7 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [checkedAt, setCheckedAt] = useState(null)
+  const [showLogs, setShowLogs] = useState(false)
   const pollRef = useRef(null)
 
   async function handleRollback(targetBuild) {
@@ -174,6 +175,12 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
     return () => clearInterval(pollRef.current)
   }, [server?.id])
 
+  // Auto-open the log panel whenever a new sync starts (deferred to avoid synchronous setState in effect)
+  useEffect(() => {
+    const running = syncState[server?.id]?.running
+    if (running) Promise.resolve().then(() => setShowLogs(true))
+  }, [syncState[server?.id]?.running]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!server) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, color: 'var(--text-muted)' }}>
@@ -191,6 +198,7 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
   const sched = schedules[server.id] || {}
   const syncing = syncState[server.id]?.running
   const syncProgress = syncState[server.id]?.progress || 0
+  const syncLogs = syncState[server.id]?.logs || []
   const isRunning = serverRunning[server.id] ?? null   // null = not yet scanned
 
   const displayBuild = server.current_build
@@ -241,17 +249,52 @@ export default function Dashboard({ onRefreshArtifact, onRefreshHistory }) {
         </button>
       </div>
 
-      {syncing && (
-        <div style={{ background: 'var(--yellow-bg)', border: '1px solid var(--yellow)', borderRadius: 'var(--radius-md)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: 'var(--yellow)' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-            </svg>
-          </span>
-          <span style={{ fontSize: 12, flex: 1, color: 'var(--text-primary)' }}>Syncing… {syncProgress}%</span>
-          <div style={{ width: 120, height: 4, background: 'var(--border)', borderRadius: 2 }}>
-            <div style={{ height: '100%', background: 'var(--yellow)', borderRadius: 2, width: `${syncProgress}%`, transition: 'width 0.3s' }} />
+      {(syncing || syncLogs.length > 0) && (
+        <div style={{ background: 'var(--yellow-bg)', border: '1px solid var(--yellow)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+          {/* Header row */}
+          <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: 'var(--yellow)' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }}>
+                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+              </svg>
+            </span>
+            <span style={{ fontSize: 12, flex: 1, color: 'var(--text-primary)' }}>
+              {syncing ? `Syncing… ${syncProgress}%` : 'Last sync completed'}
+            </span>
+            {syncing && (
+              <div style={{ width: 100, height: 4, background: 'var(--border)', borderRadius: 2 }}>
+                <div style={{ height: '100%', background: 'var(--yellow)', borderRadius: 2, width: `${syncProgress}%`, transition: 'width 0.3s' }} />
+              </div>
+            )}
+            {syncLogs.length > 0 && (
+              <button
+                onClick={() => setShowLogs((v) => !v)}
+                style={{
+                  background: 'transparent', border: '1px solid var(--yellow)', color: 'var(--yellow)',
+                  padding: '2px 8px', borderRadius: 'var(--radius-sm)', fontSize: 11, cursor: 'pointer'
+                }}
+              >
+                {showLogs ? 'Hide logs' : 'Show logs'}
+              </button>
+            )}
           </div>
+          {/* Log panel */}
+          {showLogs && syncLogs.length > 0 && (
+            <div style={{
+              borderTop: '1px solid var(--yellow)', background: 'var(--bg-app)',
+              padding: '10px 14px', maxHeight: 220, overflowY: 'auto',
+              fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)',
+              display: 'flex', flexDirection: 'column', gap: 2
+            }}>
+              {syncLogs.map((line, i) => (
+                <span key={i} style={{ whiteSpace: 'pre-wrap', color: line.includes('✓') ? 'var(--green)' : line.includes('✗') || line.toLowerCase().includes('error') ? 'var(--red)' : 'inherit' }}>
+                  {line}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
