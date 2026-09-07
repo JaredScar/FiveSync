@@ -1,6 +1,6 @@
 {
   "name": "fivesync",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "FiveM server artifact manager and auto-updater",
   "main": "out/main/index.js",
   "author": "FiveSync",
