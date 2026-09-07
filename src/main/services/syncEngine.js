@@ -218,11 +218,27 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
     log(`Applying update to server directory: ${server.path}`)
     onProgress && onProgress(85)
 
-    try {
-      copyDir(stagingDir, server.path)
-    } catch (copyErr) {
-      log(`Error: could not replace some files: ${copyErr.message}`)
-      throw copyErr
+    const maxCopyAttempts = 3
+    for (let attempt = 1; attempt <= maxCopyAttempts; attempt++) {
+      try {
+        copyDir(stagingDir, server.path)
+        break
+      } catch (copyErr) {
+        const code = copyErr && copyErr.code
+        const locked = code === 'EPERM' || code === 'EBUSY' || /EPERM|EBUSY|operation not permitted/i.test(copyErr.message || '')
+        if (!locked || attempt === maxCopyAttempts) {
+          const hint = locked
+            ? ' A file is still locked — stop all FXServer/server processes for this folder, then Sync again.'
+            : ''
+          log(`Error: could not replace some files: ${copyErr.message}${hint}`)
+          throw copyErr
+        }
+        log(
+          `File locked during copy (${copyErr.message}). Re-stopping server processes and retrying (${attempt}/${maxCopyAttempts})…`
+        )
+        await stopServerProcessForUpdate(server, log)
+        await new Promise((r) => setTimeout(r, 2000 * attempt))
+      }
     }
 
     // -----------------------------------------------------------------------

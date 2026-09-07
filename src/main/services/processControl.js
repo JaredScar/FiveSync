@@ -113,10 +113,10 @@ function legacyIsRunningServerProcess(serverPath) {
 /**
  * @param {any} server
  */
-function matchConfiguredProcess(server) {
+function matchConfiguredProcesses(server) {
   const type = server.process_match_type
   const value = (server.process_match_value || '').trim()
-  if (!type || !value) return null
+  if (!type || !value) return []
 
   let procs
   try {
@@ -124,32 +124,31 @@ function matchConfiguredProcess(server) {
   } catch {
     // If listing processes fails (e.g. PowerShell timeout/permission), treat as
     // "no match found" so the sync can still proceed without stopping anything.
-    return null
+    return []
   }
+  const found = []
   if (type === 'path') {
     const v = normPath(value)
     for (const p of procs) {
-      if (p.path && normPath(p.path) === v) return p
+      if (p.path && normPath(p.path) === v) found.push(p)
+      else if (p.commandLine && normPath(p.commandLine).includes(v)) found.push(p)
     }
-    for (const p of procs) {
-      if (p.commandLine && normPath(p.commandLine).includes(v)) return p
-    }
-  }
-  if (type === 'name') {
+  } else if (type === 'name') {
     const v = value.replace(/\.exe$/i, '').toLowerCase()
     for (const p of procs) {
       const n = (p.name || '').replace(/\.exe$/i, '').toLowerCase()
-      if (n === v) return p
+      if (n === v) found.push(p)
     }
   }
-  return null
+  return found
 }
 
 /**
- * @returns {ProcessInfo | null}
+ * @returns {ProcessInfo[]}
  */
-function findLegacyFxServerProcess(server) {
-  if (!server?.path) return null
+function findLegacyFxServerProcesses(server) {
+  if (!server?.path) return []
+  const found = []
   if (process.platform === 'win32') {
     try {
       const cmd =
@@ -162,29 +161,51 @@ function findLegacyFxServerProcess(server) {
       }).toString()
       const norm = normPath(server.path)
       const t = out.trim()
-      if (!t) return null
+      if (!t) return []
       const parsed = JSON.parse(t)
       const arr = Array.isArray(parsed) ? parsed : [parsed]
       for (const p of arr) {
         const pathStr = p.Path ? String(p.Path) : ''
         if (pathStr && pathStr.toLowerCase().replace(PATH_SEP_NORM, '\\').includes(norm)) {
-          return { pid: Number(p.Id), name: 'FXServer', path: pathStr, commandLine: null }
+          found.push({ pid: Number(p.Id), name: 'FXServer', path: pathStr, commandLine: null })
         }
       }
     } catch {
-      return null
+      return []
     }
   } else {
-    const procs = listRunningProcesses()
-    const v = normPath(server.path)
-    for (const p of procs) {
-      const n = (p.name || '').toLowerCase()
-      if (n.includes('fxserver') && p.commandLine && normPath(p.commandLine).includes(v)) {
-        return p
+    try {
+      const procs = listRunningProcesses()
+      const v = normPath(server.path)
+      for (const p of procs) {
+        const n = (p.name || '').toLowerCase()
+        if (n.includes('fxserver') && p.commandLine && normPath(p.commandLine).includes(v)) {
+          found.push(p)
+        }
       }
+    } catch {
+      return []
     }
   }
-  return null
+  return found
+}
+
+/**
+ * Collect every process that must be stopped before copying artifacts:
+ * configured match(es) + any FXServer living under the server path.
+ * Dedupes by PID.
+ * @returns {ProcessInfo[]}
+ */
+export function findAllServerProcessesToStop(server) {
+  if (!server || typeof server === 'string') return []
+  const byPid = new Map()
+  for (const p of matchConfiguredProcesses(server)) {
+    if (p?.pid && Number.isFinite(p.pid)) byPid.set(p.pid, p)
+  }
+  for (const p of findLegacyFxServerProcesses(server)) {
+    if (p?.pid && Number.isFinite(p.pid)) byPid.set(p.pid, p)
+  }
+  return [...byPid.values()]
 }
 
 /**
@@ -197,7 +218,7 @@ export function isServerProcessRunning(server) {
     return legacyIsRunningServerProcess(server)
   }
   if (server.process_match_type && (server.process_match_value || '').trim()) {
-    return !!matchConfiguredProcess(server)
+    return matchConfiguredProcesses(server).length > 0 || findLegacyFxServerProcesses(server).length > 0
   }
   return legacyIsRunningServerProcess(server.path)
 }
@@ -207,10 +228,7 @@ export function isServerProcessRunning(server) {
  */
 export function findMatchingServerProcess(server) {
   if (!server || typeof server === 'string') return null
-  if (server.process_match_type && (server.process_match_value || '').trim()) {
-    return matchConfiguredProcess(server)
-  }
-  return findLegacyFxServerProcess(server)
+  return findAllServerProcessesToStop(server)[0] || null
 }
 
 function processExists(pid) {
@@ -278,38 +296,76 @@ function killProcessHard(pid) {
 }
 
 /**
- * Stop the configured (or legacy) process before applying artifact files.
+ * Stop all matching server processes (configured + FXServer under path) before applying files.
  * @param {any} server
  * @param {(s: string) => void} [log]
- * @returns {Promise<{ stopped: boolean, reason?: string, pid?: number }>}
+ * @returns {Promise<{ stopped: boolean, reason?: string, pids?: number[] }>}
  */
 export async function stopServerProcessForUpdate(server, log) {
-  const p = findMatchingServerProcess(server)
-  if (!p) {
+  const targets = findAllServerProcessesToStop(server)
+  if (targets.length === 0) {
     if (server.process_match_type && (server.process_match_value || '').trim()) {
-      log?.('No running process matched your selection. Continuing update without stopping a process.')
+      log?.(
+        'No running process matched your selection (and no FXServer under the server path). Continuing update without stopping a process.'
+      )
       return { stopped: false, reason: 'no_match' }
     }
-    log?.('No matching server process is running (legacy check). Proceeding with update.')
+    log?.('No matching server process is running. Proceeding with update.')
     return { stopped: false, reason: 'not_running' }
   }
-  log?.(`Stopping process PID ${p.pid} (${p.name || 'process'}) before applying files…`)
-  try {
-    killProcessHard(p.pid)
-  } catch (e) {
-    const msg = e && e.message ? e.message : String(e)
-    const err = new Error(`Failed to stop process ${p.pid}: ${msg}`)
-    err.cause = e
-    throw err
+
+  const pids = targets.map((p) => p.pid)
+  log?.(
+    `Stopping ${targets.length} process(es) before applying files: ${targets
+      .map((p) => `PID ${p.pid} (${p.name || 'process'})`)
+      .join(', ')}…`
+  )
+
+  for (const p of targets) {
+    try {
+      killProcessHard(p.pid)
+    } catch (e) {
+      // Process may already have exited; ignore "not found" style failures
+      if (processExists(p.pid)) {
+        const msg = e && e.message ? e.message : String(e)
+        const err = new Error(`Failed to stop process ${p.pid}: ${msg}`)
+        err.cause = e
+        throw err
+      }
+    }
   }
-  await waitForProcessExit(p.pid, 20000)
-  if (processExists(p.pid)) {
+
+  await Promise.all(pids.map((pid) => waitForProcessExit(pid, 20000)))
+
+  const stillAlive = pids.filter((pid) => processExists(pid))
+  if (stillAlive.length > 0) {
     throw new Error(
-      `Process ${p.pid} is still running after stop attempt. Close it manually, then try again.`
+      `Process(es) still running after stop attempt: ${stillAlive.join(', ')}. Close them manually, then try again.`
     )
   }
-  log?.('Server process stopped.')
-  return { stopped: true, pid: p.pid, reason: 'ok' }
+
+  // Give Windows a moment to release DLL handles (botan.dll / FXServer.exe locks).
+  await new Promise((r) => setTimeout(r, 1500))
+
+  // Re-check: another FXServer may have been spawned or missed
+  const remaining = findAllServerProcessesToStop(server)
+  if (remaining.length > 0) {
+    log?.(
+      `Found ${remaining.length} additional process(es) still holding the server — stopping them…`
+    )
+    for (const p of remaining) {
+      try {
+        killProcessHard(p.pid)
+      } catch {
+        /* ignore */
+      }
+    }
+    await Promise.all(remaining.map((p) => waitForProcessExit(p.pid, 10000)))
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+
+  log?.('Server process(es) stopped.')
+  return { stopped: true, pids, reason: 'ok' }
 }
 
 /**
