@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
-import { dirname, extname, resolve } from 'path'
+import { dirname, extname, join, resolve } from 'path'
 
 /**
  * @typedef {{ pid: number, name: string, path: string | null, commandLine: string | null }} ProcessInfo
@@ -369,43 +369,90 @@ export async function stopServerProcessForUpdate(server, log) {
 }
 
 /**
+ * Resolve the launcher to run after an update.
+ * Prefer the configured start command; otherwise fall back to FXServer in the server path.
  * @param {any} server
- * @returns {{ started: boolean, error?: string, message?: string, pid?: number }}
+ * @returns {string}
+ */
+function resolveStartCommandPath(server) {
+  const configured = (server.start_command_path || '').trim()
+  if (configured) return configured
+  if (!server?.path) return ''
+  const candidates =
+    process.platform === 'win32'
+      ? [join(server.path, 'FXServer.exe')]
+      : [join(server.path, 'run.sh'), join(server.path, 'FXServer')]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return ''
+}
+
+/**
+ * @param {any} server
+ * @returns {{ started: boolean, error?: string, message?: string, pid?: number, path?: string }}
  */
 export function startServerCommand(server) {
-  const filePath = (server.start_command_path || '').trim()
+  const filePath = resolveStartCommandPath(server)
   if (!filePath) {
-    return { started: false, message: 'No start command configured' }
+    return {
+      started: false,
+      message:
+        'No start command configured and no FXServer found in the server folder — set “Start after update” in Settings.'
+    }
   }
   if (!existsSync(filePath)) {
     return { started: false, error: `Start command not found: ${filePath}` }
   }
+
+  const resolvedFile = resolve(filePath)
   const wdir = (server.start_working_dir || '').trim()
   const cwd =
-    wdir && existsSync(wdir) ? resolve(wdir) : dirname(resolve(filePath))
-  const ext = extname(filePath).toLowerCase()
-  const common = {
-    cwd,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true
-  }
+    wdir && existsSync(wdir) ? resolve(wdir) : dirname(resolvedFile)
+  const ext = extname(resolvedFile).toLowerCase()
+
   let child
-  if (process.platform === 'win32') {
-    if (ext === '.bat' || ext === '.cmd') {
-      child = spawn(process.env.ComSpec || 'cmd.exe', ['/c', filePath], common)
-    } else if (ext === '.ps1') {
-      child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', filePath], common)
+  try {
+    if (process.platform === 'win32') {
+      // Use `cmd /c start` so the process is fully detached and paths with spaces work.
+      // First quoted arg after `start` is the window title (required when the path is quoted).
+      const comspec = process.env.ComSpec || 'cmd.exe'
+      const title = 'FiveSync Server'
+      let inner
+      if (ext === '.bat' || ext === '.cmd') {
+        inner = `start "${title}" /D "${cwd}" "${resolvedFile}"`
+      } else if (ext === '.ps1') {
+        inner = `start "${title}" /D "${cwd}" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolvedFile}"`
+      } else {
+        inner = `start "${title}" /D "${cwd}" "${resolvedFile}"`
+      }
+      child = spawn(comspec, ['/S', '/C', inner], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      })
+    } else if (ext === '.sh' || resolvedFile.endsWith('.sh')) {
+      child = spawn('/bin/sh', [resolvedFile], {
+        cwd,
+        detached: true,
+        stdio: 'ignore'
+      })
     } else {
-      child = spawn(filePath, [], common)
+      child = spawn(resolvedFile, [], {
+        cwd,
+        detached: true,
+        stdio: 'ignore'
+      })
     }
-  } else {
-    if (ext === '.sh' || filePath.endsWith('.sh')) {
-      child = spawn('/bin/sh', [filePath], common)
-    } else {
-      child = spawn(filePath, [], { ...common, shell: false })
-    }
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e)
+    return { started: false, error: msg, path: resolvedFile }
   }
+
+  if (!child || !child.pid) {
+    return { started: false, error: 'Failed to spawn start command (no PID)', path: resolvedFile }
+  }
+
   child.unref()
-  return { started: true, pid: child.pid }
+  return { started: true, pid: child.pid, path: resolvedFile }
 }

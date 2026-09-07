@@ -261,9 +261,9 @@ export async function runSyncJob(serverId, onProgress, onLog, options = {}) {
 
     const restart = startServerCommand(getServer(serverId) || server)
     if (restart.started) {
-      log(`Started server launcher (PID ${restart.pid ?? '—'}).`)
+      log(`Started server launcher: ${restart.path || 'configured command'} (spawn PID ${restart.pid ?? '—'}).`)
     } else if (restart.error) {
-      log(`Warning: could not start configured launcher: ${restart.error}`)
+      log(`Warning: could not start server launcher: ${restart.error}`)
     } else if (restart.message) {
       log(restart.message)
     }

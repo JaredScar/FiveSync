@@ -377,7 +377,9 @@ export default function Settings({ onDeleteServer, onSaveSettings }) {
                   </svg>
                 </span>
               </div>
-              <span className="field-hint">If empty, FiveSync will not start the server after an update (you can start it yourself).</span>
+              <span className="field-hint">
+                Optional. If empty, FiveSync starts <code>FXServer.exe</code> (or <code>run.sh</code>) from the server folder after a successful update. Use this for a custom .bat launcher.
+              </span>
             </div>
             <div className="field">
               <label>Start working directory (optional)</label>
